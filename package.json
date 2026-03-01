@@ -1,0 +1,12 @@
+{
+  "name": "@f6n/copilot-usage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": "./dist/cli.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/**/*.test.mjs"
+  }
+}
