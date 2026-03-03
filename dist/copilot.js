@@ -266,7 +266,10 @@ function parseCompactTokenCount(raw) {
 }
 function parsePromptUsageSummary(output) {
     const usageByModel = new Map();
-    const normalizedOutput = output.replace(/\u0007/gu, "");
+    const normalizedOutput = output
+        .replace(/\u0007/gu, "")
+        .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/gu, "")
+        .replace(/\r/gu, "\n");
     const lineRegex = /^\s*([A-Za-z0-9._:-]+)\s+([0-9][0-9.,]*(?:\.[0-9]+)?[kKmM]?)\s+in,\s+([0-9][0-9.,]*(?:\.[0-9]+)?[kKmM]?)\s+out,\s+([0-9][0-9.,]*(?:\.[0-9]+)?[kKmM]?)\s+cached\b.*$/gmu;
     for (const match of normalizedOutput.matchAll(lineRegex)) {
         const model = match[1];
@@ -276,10 +279,12 @@ function parsePromptUsageSummary(output) {
         const totalTokens = inputTokens + outputTokens;
         const existing = usageByModel.get(model);
         if (existing) {
-            existing.inputTokens += inputTokens;
-            existing.outputTokens += outputTokens;
-            existing.cachedInputTokens += cachedInputTokens;
-            existing.totalTokens += totalTokens;
+            // Interactive TUI output can redraw the same summary line multiple times.
+            // Keep the largest observed snapshot per model instead of summing duplicates.
+            existing.inputTokens = Math.max(existing.inputTokens, inputTokens);
+            existing.outputTokens = Math.max(existing.outputTokens, outputTokens);
+            existing.cachedInputTokens = Math.max(existing.cachedInputTokens, cachedInputTokens);
+            existing.totalTokens = Math.max(existing.totalTokens, totalTokens);
             continue;
         }
         usageByModel.set(model, {

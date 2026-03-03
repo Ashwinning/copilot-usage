@@ -94,3 +94,57 @@ test("storePromptUsageFromOutput captures non-interactive usage summary", async 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("storePromptUsageFromOutput captures interactive summary with ANSI control codes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f6n-copilot-usage-interactive-"));
+  const stateHome = path.join(root, "state-home");
+  try {
+    const paths = resolvePaths(stateHome);
+    const output = [
+      "\u001b[16;1H Total usage est:        0 Premium requests",
+      " Breakdown by AI model:",
+      "  gpt-4.1                 18.3k in, 3 out, 0 cached (Est. 0 Premium requests)",
+      "\u001b[?25h"
+    ].join("\r\n");
+    const result = await storePromptUsageFromOutput(paths, output);
+    assert.equal(result.stored, true);
+    assert.equal(result.usageEntries, 1);
+
+    const usage = await readStoredCopilotUsage(paths);
+    assert.equal(usage.length, 1);
+    assert.equal(usage[0].model, "gpt-4.1");
+    assert.equal(usage[0].inputTokens, 18_300);
+    assert.equal(usage[0].cachedInputTokens, 0);
+    assert.equal(usage[0].outputTokens, 3);
+    assert.equal(usage[0].totalTokens, 18_303);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("storePromptUsageFromOutput does not double count duplicated redraw lines", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f6n-copilot-usage-redraw-"));
+  const stateHome = path.join(root, "state-home");
+  try {
+    const paths = resolvePaths(stateHome);
+    const output = [
+      " Breakdown by AI model:",
+      "  gpt-4.1                 18.4k in, 3 out, 5.9k cached (Est. 0 Premium requests)",
+      " Breakdown by AI model:",
+      "  gpt-4.1                 18.4k in, 3 out, 5.9k cached (Est. 0 Premium requests)"
+    ].join("\n");
+    const result = await storePromptUsageFromOutput(paths, output);
+    assert.equal(result.stored, true);
+    assert.equal(result.usageEntries, 1);
+
+    const usage = await readStoredCopilotUsage(paths);
+    assert.equal(usage.length, 1);
+    assert.equal(usage[0].model, "gpt-4.1");
+    assert.equal(usage[0].inputTokens, 18_400);
+    assert.equal(usage[0].cachedInputTokens, 5_900);
+    assert.equal(usage[0].outputTokens, 3);
+    assert.equal(usage[0].totalTokens, 18_403);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

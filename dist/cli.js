@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { aggregateDaily, aggregateMonthly, aggregateSessions } from "./aggregate.js";
 import { readStoredCopilotUsage, storeLatestSession, storePromptUsageFromOutput } from "./copilot.js";
 import { appendHookDebugLog } from "./debug-log.js";
@@ -85,8 +85,28 @@ function parseArgs(argv) {
 function isPromptMode(forwardedArgs) {
     return forwardedArgs.some((arg) => arg === "-p" || arg === "--prompt" || arg.startsWith("--prompt="));
 }
-async function runCopilot(forwardedArgs) {
-    const promptMode = isPromptMode(forwardedArgs);
+function isWindows() {
+    return process.platform === "win32";
+}
+function resolveCopilotCommandForPty() {
+    if (!isWindows()) {
+        return "copilot";
+    }
+    const whereResult = spawnSync("where", ["copilot"], {
+        encoding: "utf8"
+    });
+    if (whereResult.status === 0 && typeof whereResult.stdout === "string") {
+        const firstMatch = whereResult.stdout
+            .split(/\r?\n/u)
+            .map((line) => line.trim())
+            .find((line) => line.length > 0);
+        if (firstMatch) {
+            return firstMatch;
+        }
+    }
+    return "copilot.cmd";
+}
+async function runCopilotWithSpawn(forwardedArgs, promptMode) {
     return new Promise((resolve, reject) => {
         const child = spawn("copilot", forwardedArgs, {
             stdio: promptMode ? ["inherit", "pipe", "pipe"] : "inherit"
@@ -107,16 +127,117 @@ async function runCopilot(forwardedArgs) {
         child.on("error", reject);
         child.on("exit", (code, signal) => {
             if (typeof code === "number") {
-                resolve({ exitCode: code, output });
+                resolve({ exitCode: code, output, captureMode: "spawn" });
                 return;
             }
             if (signal) {
-                resolve({ exitCode: 1, output });
+                resolve({ exitCode: 1, output, captureMode: "spawn" });
                 return;
             }
-            resolve({ exitCode: 0, output });
+            resolve({ exitCode: 0, output, captureMode: "spawn" });
         });
     });
+}
+async function runCopilotWithPty(forwardedArgs) {
+    const ptyModuleRaw = await import("node-pty");
+    const ptyModule = typeof ptyModuleRaw.spawn === "function"
+        ? ptyModuleRaw
+        : ptyModuleRaw.default;
+    if (!ptyModule || typeof ptyModule.spawn !== "function") {
+        throw new Error("node-pty did not expose a spawn function.");
+    }
+    const ptySpawn = ptyModule.spawn;
+    const command = resolveCopilotCommandForPty();
+    const args = forwardedArgs;
+    const ptyProcess = ptySpawn(command, args, {
+        name: process.env.TERM ?? "xterm-256color",
+        cols: process.stdout.columns ?? 120,
+        rows: process.stdout.rows ?? 40,
+        cwd: process.cwd(),
+        env: process.env
+    });
+    let output = "";
+    const onPtyData = (data) => {
+        output += data;
+        process.stdout.write(data);
+    };
+    ptyProcess.onData(onPtyData);
+    const canResize = process.stdout.isTTY;
+    const onResize = () => {
+        if (!canResize) {
+            return;
+        }
+        const cols = process.stdout.columns ?? 120;
+        const rows = process.stdout.rows ?? 40;
+        try {
+            ptyProcess.resize(cols, rows);
+        }
+        catch {
+            // Ignore resize race conditions.
+        }
+    };
+    if (canResize) {
+        process.stdout.on("resize", onResize);
+    }
+    const stdin = process.stdin;
+    const stdinWasRaw = Boolean(stdin.isRaw);
+    const canForwardInput = stdin.isTTY;
+    const onStdinData = (chunk) => {
+        const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        ptyProcess.write(text);
+    };
+    if (canForwardInput) {
+        if (typeof stdin.setRawMode === "function" && !stdinWasRaw) {
+            stdin.setRawMode(true);
+        }
+        stdin.resume();
+        stdin.on("data", onStdinData);
+    }
+    const onSigInt = () => {
+        ptyProcess.write("\x03");
+    };
+    const onSigTerm = () => {
+        ptyProcess.write("\x03");
+    };
+    process.on("SIGINT", onSigInt);
+    process.on("SIGTERM", onSigTerm);
+    return new Promise((resolve) => {
+        ptyProcess.onExit(({ exitCode }) => {
+            process.off("SIGINT", onSigInt);
+            process.off("SIGTERM", onSigTerm);
+            if (canResize) {
+                process.stdout.off("resize", onResize);
+            }
+            if (canForwardInput) {
+                stdin.off("data", onStdinData);
+                if (typeof stdin.setRawMode === "function" && !stdinWasRaw) {
+                    stdin.setRawMode(false);
+                }
+            }
+            resolve({
+                exitCode: Number.isFinite(exitCode) ? exitCode : 1,
+                output,
+                captureMode: "pty"
+            });
+        });
+    });
+}
+async function runCopilot(forwardedArgs) {
+    const promptMode = isPromptMode(forwardedArgs);
+    if (!promptMode && process.stdin.isTTY && process.stdout.isTTY) {
+        try {
+            return await runCopilotWithPty(forwardedArgs);
+        }
+        catch (error) {
+            const fallbackReason = error instanceof Error ? error.message : String(error);
+            const result = await runCopilotWithSpawn(forwardedArgs, promptMode);
+            return {
+                ...result,
+                ptyFallbackReason: fallbackReason
+            };
+        }
+    }
+    return runCopilotWithSpawn(forwardedArgs, promptMode);
 }
 async function ensureHookInstalled(options) {
     const paths = resolvePaths(options.stateHome);
@@ -150,6 +271,11 @@ async function runWrapper(options) {
     console.log(`[copilot-usage] Usage tracking hook ready (${hookFile}). Launching copilot...`);
     try {
         const result = await runCopilot(options.forwardedArgs);
+        await appendHookDebugLog(paths, "cli.copilot_run.completed", {
+            captureMode: result.captureMode,
+            outputLength: result.output.length,
+            ptyFallbackReason: result.ptyFallbackReason ?? null
+        });
         const promptCapture = await storePromptUsageFromOutput(paths, result.output);
         if (promptCapture.stored) {
             await appendHookDebugLog(paths, "cli.prompt_usage.stored", {

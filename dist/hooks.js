@@ -15,19 +15,31 @@ async function exists(targetPath) {
 function quoteForShell(value) {
     return `"${value.replace(/"/gu, '\\"')}"`;
 }
+function quoteForPowerShell(value) {
+    return `'${value.replace(/'/gu, "''")}'`;
+}
 function localCliHookCommand() {
     if (!process.argv[1]) {
         return undefined;
     }
     const scriptPath = path.resolve(process.argv[1]);
-    return `${quoteForShell(process.execPath)} ${quoteForShell(scriptPath)} ${STORE_SESSION_FLAG}`;
+    return {
+        bash: `${quoteForShell(process.execPath)} ${quoteForShell(scriptPath)} ${STORE_SESSION_FLAG}`,
+        powershell: `& ${quoteForPowerShell(process.execPath)} ${quoteForPowerShell(scriptPath)} ${STORE_SESSION_FLAG}`
+    };
 }
 function buildHookCommand() {
     const localCommand = localCliHookCommand();
     if (!localCommand) {
-        return HOOK_COMMAND;
+        return {
+            bash: HOOK_COMMAND,
+            powershell: HOOK_COMMAND
+        };
     }
-    return `${HOOK_COMMAND} || ${localCommand}`;
+    return {
+        bash: `${HOOK_COMMAND} || ${localCommand.bash}`,
+        powershell: `${HOOK_COMMAND}; if ($LASTEXITCODE -ne 0) { ${localCommand.powershell} }`
+    };
 }
 function hasStoreSessionHook(parsed) {
     if (!parsed || typeof parsed !== "object") {
@@ -53,11 +65,13 @@ function hasStoreSessionHook(parsed) {
         const bash = typeof record.bash === "string" ? record.bash : "";
         const powershell = typeof record.powershell === "string" ? record.powershell : "";
         const hasStoreFlag = bash.includes(STORE_SESSION_FLAG) || powershell.includes(STORE_SESSION_FLAG);
-        const hasFallbackCommand = bash.includes("||") ||
-            powershell.includes("||") ||
-            /\bnode(?:\.exe)?\b/iu.test(bash) ||
-            /\bnode(?:\.exe)?\b/iu.test(powershell);
-        return hasStoreFlag && hasFallbackCommand;
+        if (!hasStoreFlag) {
+            return false;
+        }
+        const bashHasFallback = !bash.includes(STORE_SESSION_FLAG) || bash.includes("||");
+        const powershellHasFallback = !powershell.includes(STORE_SESSION_FLAG) ||
+            powershell.includes("if ($LASTEXITCODE -ne 0)");
+        return bashHasFallback && powershellHasFallback;
     });
 }
 async function isValidHookFile(filePath) {
@@ -113,8 +127,8 @@ export async function installHook(repoRoot) {
             sessionEnd: [
                 {
                     type: "command",
-                    bash: hookCommand,
-                    powershell: hookCommand,
+                    bash: hookCommand.bash,
+                    powershell: hookCommand.powershell,
                     cwd: ".",
                     timeoutSec: 10
                 }
