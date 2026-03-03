@@ -97,7 +97,7 @@ async function isValidHookFile(filePath: string): Promise<boolean> {
   }
 }
 
-export async function findRepoRoot(startDirectory: string): Promise<string> {
+export async function findRepoRoot(startDirectory: string): Promise<string | undefined> {
   let current = path.resolve(startDirectory);
   while (true) {
     if (await exists(path.join(current, ".git"))) {
@@ -105,7 +105,7 @@ export async function findRepoRoot(startDirectory: string): Promise<string> {
     }
     const parent = path.dirname(current);
     if (parent === current) {
-      return path.resolve(startDirectory);
+      return undefined;
     }
     current = parent;
   }

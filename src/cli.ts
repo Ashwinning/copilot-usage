@@ -277,11 +277,14 @@ async function runCopilot(forwardedArgs: string[]): Promise<CopilotRunResult> {
   return runCopilotWithSpawn(forwardedArgs, promptMode);
 }
 
-async function ensureHookInstalled(options: CliOptions): Promise<string> {
+async function ensureHookInstalled(options: CliOptions): Promise<string | undefined> {
   const paths = resolvePaths(options.stateHome);
   await ensurePaths(paths);
   const state = await loadUsageState(paths);
   const repoRoot = await findRepoRoot(process.cwd());
+  if (!repoRoot) {
+    return undefined;
+  }
   const repoState = state.repos[repoRoot];
   const discovery = await discoverHook(repoRoot, repoState?.hookFile);
 
@@ -309,7 +312,11 @@ async function runWrapper(options: CliOptions): Promise<void> {
   const paths = resolvePaths(options.stateHome);
   await ensurePaths(paths);
   const hookFile = await ensureHookInstalled(options);
-  console.log(`[copilot-usage] Usage tracking hook ready (${hookFile}). Launching copilot...`);
+  if (hookFile) {
+    console.log(`[copilot-usage] Usage tracking hook ready (${hookFile}). Launching copilot...`);
+  } else {
+    console.log("[copilot-usage] No Git repository found. Using direct session capture fallback.");
+  }
   try {
     const result = await runCopilot(options.forwardedArgs);
     await appendHookDebugLog(paths, "cli.copilot_run.completed", {
@@ -327,6 +334,20 @@ async function runWrapper(options: CliOptions): Promise<void> {
       await appendHookDebugLog(paths, "cli.prompt_usage.not_stored", {
         message: promptCapture.message
       });
+      if (!hookFile) {
+        const sessionCapture = await storeLatestSession(paths, options.copilotHome);
+        if (sessionCapture.stored) {
+          await appendHookDebugLog(paths, "cli.session_usage.stored", {
+            sessionId: sessionCapture.sessionId ?? null,
+            usageEntries: sessionCapture.usageEntries,
+            archivePath: sessionCapture.archivePath ?? null
+          });
+        } else {
+          await appendHookDebugLog(paths, "cli.session_usage.not_stored", {
+            message: sessionCapture.message
+          });
+        }
+      }
     }
     process.exit(result.exitCode);
   } catch (error: unknown) {

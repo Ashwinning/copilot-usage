@@ -10,7 +10,8 @@ Repository: https://github.com/Ashwinning/copilot-usage
 ## What This App Does
 
 - Runs native `copilot` with your same flags and interactive behavior
-- Installs and maintains a repo session-end hook at `.github/hooks/f6n-copilot-usage.json`
+- Installs and maintains a repo session-end hook at `.github/hooks/f6n-copilot-usage.json` when inside a Git repo
+- Falls back to direct latest-session capture when run outside a Git repo
 - Captures usage into local JSONL files so you can inspect usage history later
 - Supports prompt-mode fallback capture (`-p` / `--prompt`) from Copilot terminal output
 
@@ -21,9 +22,10 @@ No cloud service is required. Data stays on your machine.
 ![Copilot Usage flow](./assets/copilot-usage-flow.svg)
 
 1. You run `bunx @f6n/copilot-usage` (instead of `copilot`).
-2. The wrapper ensures the hook file exists in your current repository.
+2. In Git repos, the wrapper ensures the hook file exists in your current repository.
 3. Copilot runs normally.
 4. On session end, the hook invokes `--f6n-store-session` and stores usage from latest Copilot events.
+   When not in a Git repo, the wrapper captures from latest Copilot session state directly after the run.
 5. Stored summaries are readable via `--f6n-show-usage` and consumable by `@f6n/cli-usage`.
 
 ## First-Time Setup (Step by Step)

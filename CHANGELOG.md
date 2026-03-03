@@ -2,6 +2,16 @@
 
 All notable changes to `@f6n/copilot-usage` are documented in this file.
 
+## 0.1.2 - 2026-03-04
+
+### Fixed
+- Fixed non-repo execution flow to avoid creating `.github/hooks` in arbitrary directories.
+- Added direct latest-session capture fallback for non-repo interactive runs when prompt-summary parsing does not produce usage rows.
+
+### Added
+- Added test coverage for repo-root detection when no `.git` directory exists.
+- Clarified README behavior for Git-repo hook mode vs non-repo fallback capture mode.
+
 ## 0.1.1 - 2026-03-03
 
 ### Fixed

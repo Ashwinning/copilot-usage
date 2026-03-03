@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { discoverHook, installHook } from "../dist/hooks.js";
+import { discoverHook, findRepoRoot, installHook } from "../dist/hooks.js";
 import { readStoredCopilotUsage, storeLatestSession, storePromptUsageFromOutput } from "../dist/copilot.js";
 import { resolvePaths } from "../dist/state.js";
 
@@ -90,6 +90,16 @@ test("storePromptUsageFromOutput captures non-interactive usage summary", async 
     assert.equal(usage[0].cachedInputTokens, 5_800);
     assert.equal(usage[0].outputTokens, 4);
     assert.equal(usage[0].totalTokens, 20_904);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("findRepoRoot returns undefined when no git root exists", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f6n-copilot-usage-norepo-"));
+  try {
+    const repoRoot = await findRepoRoot(root);
+    assert.equal(repoRoot, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -91,7 +91,7 @@ export async function findRepoRoot(startDirectory) {
         }
         const parent = path.dirname(current);
         if (parent === current) {
-            return path.resolve(startDirectory);
+            return undefined;
         }
         current = parent;
     }
